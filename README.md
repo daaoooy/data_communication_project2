@@ -192,6 +192,8 @@
 | void deserialize(char *buffer, Packet *packet) | 버퍼에 직렬화 했던 것을 다시 구조체로 역직렬화 해준다 |
 
 
+
+
 ### Sender.c ###
 
 Sender은 아래와 같은 네 가지 함수와 main 함수를 가진다.
@@ -203,7 +205,28 @@ Sender은 아래와 같은 네 가지 함수와 main 함수를 가진다.
 | void signalrm_handler(int signal) | 타이머가 만료됐을 때 호출될 함수. 데이터 패킷 또는 FIN을 재전송을 해준다 |
 | Packet send_packet (FILE *file, int seqNum) | 데이터 패킷 또는 FIN을 전송해준다 |
 
-main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 기반한 송수신이 이루어진다.
+main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 기반한 송수신이 이루어진다. 여려 변수들이 있지만 중요하게 생각
+되는 변수는 아래와 같다.
+
+| 변수 | 설명 |
+|-----|-----|
+| Packet received_packet | Receiver로부터 받은 패킷을 저장할 변수 |
+| int seqNum | 패킷을 전송할 때, 전송받은 ack의 ackNum을 확인할 때 사용할 변수 |
+| Packet current_packet | 최근에 전송한 패킷을 담아둘 변수 |
+
+#### sender은 어떤식으로 작동하는가? ####
+
+- sender은 프로그램이 종료될 때까지 send 작업이 계속된다. (while문 사용)
+- 또한 received 작업도 계속된다 (while문 사용)
+- 먼저 데이터 패킷을 전송하고, ack를 기다린다.
+- ack를 받으면 drop 시킬지, 말지를 확률에 의해 결정한다.
+- 만약, drop 시켰다면 로그 작성 및 화면 출력만 하고 다른 작업은 하지 않는다.
+- ack를 드롭시켰다는 것은 데이터 패킷을 재전송해야 함을 의미하므로 타이머가 만료될 것이다.
+- 타이머가 만료되면 signalrm_handler 함수가 작동한다. 즉 재전송이 이루어진다 (알람도 재설정 됨)
+- 만약, drop 시키지 않았다면 받은 ack 패킷을 확인하고 ack 일 때, FIN (EOT) 일 때를 나누어 처리한다.
+- ack라면 다음 패킷을 보낼 준비를 한다 (알람 종료, seqNum 다음 번호로 바꿔주기)
+- 이 후 작업은 반복된다.
+- eot라면 R_FIN을 받은 것이므로 프로그램을 종료한다.
 
 
 ### Receiver.c ###
@@ -217,9 +240,27 @@ Receiver은 아래와 같은 네 가지 함수와 main 함수를 가진다.
 | void log_and_print(char *event) | 로그 작성 및 화면 출력 |
 | void send_ack (int ackNum) | ACK 패킷을 전송해준다 |
 
-main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 기반한 송수신이 이루어진다.
+main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 기반한 송수신이 이루어진다. 중요하게 사용한 변수는 아래와 같다.
 
+| 변수 | 설명 |
+|-----|-----|
+| Packet received_packet | Sender 로부터 받은 패킷을 저장할 변수 |
+| int check_seqNum | 패킷을 전송할 때, 전송받은 data의 seqNum을 확인할 때 사용할 변수 |
+| Packet current_packet | 최근에 전송한 패킷을 담아둘 변수 |
 
+#### Receiver은 어떤식으로 작동하는가? ####
+
+- receiver은 프로그램이 종료될 때까지 receive 작업이 계속된다. (while문 사용)
+- 데이터 패킷을 받으면, drop 시킬지, 말지를 확률에 의해 결정한다.
+- 만약 drop 시켰다면 로그 작성 및 화면 출력을 해준후 다른 작업은 하지 않는다.
+- 데이터 패킷을 drop 시켰다는 것은 receiver가 data packet을 못 받은 상황이므로 sender의 타이머가 만료되어 재전송해줄 것이다.
+- 만약 drop 시키지 않았다면 받은 data 패킷을 확인하고 data일 때, FIN(eot)일 때, sender에서 ack를 드롭시킨 상황일 때를 나누어 처리해준다.
+- data 타입이라면, 패킷 확인후 ack를 전송한다. 또한 다음번 패킷을 위해 check_seqNum을 다음 번호로 바꿔준다.
+- eot 타입이라면, 재전송 판단 후 ack(R_FIN)를 전송한다. 일정시간 후 종료할 것이므로 타이머를 설정한다.
+- sender에서 ack를 드롭시킨 상황, 즉 중복적으로 패킷을 받은 경우에는 패킷을 또 받았다고 알린다. 또한 check_seqSum을 조정해주어 ack를 전송하고 돌려놔야한다.
+- 이런 작업이 반복된다.
+- eot 타입 패킷을 받아 타이머가 설정되고, 재전송이 없어 타이머가 만료되면 프로그램은 종료된다.
+- 
 ------------------------- 
 
 
@@ -255,14 +296,18 @@ main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 
 - Receiver의 출력 모습
   ![image](https://github.com/daaoooy/data_communication_project2/assets/143688136/0efa0568-38ab-4aff-8ab0-c4cebabd67d8)
 
+
 - 프로그램이 시작하고 0번 패킷 전송은 잘 이루어졌는데, 1번 패킷 과정을 보내는 과정에서 ack drop 을 볼 수 있다.
 - Sender가 데이터 패킷 (1)을 전송했고 Receiver가 이를 확인후 ACK (1)을 보냈는데 이 ACK가 제대로 보내지지 않은 상황이다.
 - 그래서 Sender은 ACK를 받지 못해 타임 아웃이 발생했고, Receiver 측이 데이터 패킷을 잘 못 받았다는 판단을 내려 패킷을 재전송하였다.
 - 그러나 Receiver은 전에 데이터 패킷 (1)을 받았고, 이에 대한 ACK (1) 까지 보냈기에, 데이터 패킷 (1)을 중복적으로 받은 것이 된다.
 - 이를 확인해 화면에 '다시 받았다' 라는 의미로 Receive again이라고 표시해주고 ACK를 다시 보내주었다.
 - 로그를 확인해보면 아래와 같다.
+
 - Sedner의 로그
   ![image](https://github.com/daaoooy/data_communication_project2/assets/143688136/03428455-37b5-4d0e-ada3-ff5928c96c0e)
+
+
 - Receiver의 로그
  ![image](https://github.com/daaoooy/data_communication_project2/assets/143688136/9db1ce53-c64a-47d4-b7c2-c65098e775b8)
 
@@ -283,4 +328,4 @@ main 함수에서는 본격적으로 소켓을 생성하고 rdt 프로토콜에 
 
 ------------------
 
-
+## 코드는 따로 제출할 것이므로 코드는 Readme 파일에 첨부하지 않았습니다. ## 
